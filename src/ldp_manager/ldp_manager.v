@@ -4,8 +4,31 @@
 //
 //   Date     Who   Ver  Changess
 //=============================================================================
-// 27-May-22  DWW     1  Initial creation
+// 05-Jun-24  DWW     1  Initial creation
 //=============================================================================
+
+/*
+
+   This module takes as its primary input two streams: one of frame-data and
+   one of meta-data.
+
+   There are two host-RAM buffers for frame-data, two host-RAM buffers for 
+   meta-data, and a host-RAM buffer for two side-by-side frame-counters.
+
+   Frame-data is "ping-ponged" between the two frame-data buffers, 16K at
+   a time.   After a frame is written, the meta-data is written, with identical
+   copies being written to each meta-data buffer in host-RAM.   After meta-data
+   has been written, the frame-counter is written.
+
+   It is assumed that the M_AXI output of this module will feed a PCIe bus.  
+   There has intentionally been no attempt made to enforce any PCIe write-
+   transaction ordering.   The "reader" of the data we write will be monitoring
+   the frame-counter, and when it detects an increment, it will pause for a
+   brief moment to ensure that the entire frame-data and meta-data has finished
+   writing to host-RAM.   By making no attempt to enforce PCIe write-ordering, 
+   we avail ourselves of the maximum possible PCIe bandwidth.
+
+*/
 
 module ldp_manager # (parameter DW=512, AW=64)
 (
@@ -465,6 +488,8 @@ always @* begin
         axis_fd_tready = 0;
 
     end else case (wsm_state)
+        
+        // Are we writing the first cycle of data for this frame?
         WSM_WAIT_FIRST_FD:
             begin
                 axis_fd_tready = M_AXI_WREADY;
@@ -474,6 +499,7 @@ always @* begin
                 M_AXI_WVALID   = axis_fd_tvalid;
             end
 
+        // Are we writing a subsequent cycle of data for this frame?
         WSM_WAIT_REMAINING_FD:
             begin
                 axis_fd_tready = M_AXI_WREADY;
@@ -483,6 +509,7 @@ always @* begin
                 M_AXI_WVALID   = axis_fd_tvalid;
             end            
 
+        // Are we writing the first cycle of copy #1 of meta-data?
         WSM_WRITE_MD00:
             begin
                 axis_fd_tready = 0;
@@ -492,6 +519,7 @@ always @* begin
                 M_AXI_WVALID   = 1;
             end            
 
+        // Are we writing the second cycle of copy #1 of meta-data?
         WSM_WRITE_MD01:
             begin
                 axis_fd_tready = 0;
@@ -501,6 +529,7 @@ always @* begin
                 M_AXI_WVALID   = 1;
             end            
 
+        // Are we writing the first cycle of copy #2 of meta-data?
         WSM_WRITE_MD10:
             begin
                 axis_fd_tready = 0;
@@ -510,6 +539,7 @@ always @* begin
                 M_AXI_WVALID   = 1;
             end            
 
+        // Are we writing the second cycle of copy #2 of meta-data?
         WSM_WRITE_MD11:
             begin
                 axis_fd_tready = 0;
@@ -519,6 +549,7 @@ always @* begin
                 M_AXI_WVALID   = 1;
             end            
 
+        // Are we writing the framer-counters?
         WSM_WRITE_FC:
             begin
                 axis_fd_tready = 0;
