@@ -114,10 +114,10 @@ reg [DW-1:0] metadata[0:1];
 reg[2:0]   wsm_state;
 localparam WSM_WAIT_FIRST_FD     = 0;
 localparam WSM_WAIT_REMAINING_FD = 1;
-localparam WSM_WRITE_MD10        = 2;
-localparam WSM_WRITE_MD11        = 3;
-localparam WSM_WRITE_MD20        = 4;
-localparam WSM_WRITE_MD21        = 5;
+localparam WSM_WRITE_MD00        = 2;
+localparam WSM_WRITE_MD01        = 3;
+localparam WSM_WRITE_MD10        = 4;
+localparam WSM_WRITE_MD11        = 5;
 localparam WSM_WRITE_FC          = 6;
 
 
@@ -140,13 +140,13 @@ reg awsm_fd_write;
 
 // The first frame-data cycle is defined as a W-handshake occurs while the W-channel
 // state machine is waiting for the first data-cycle of the frame.
-wire first_fd_cycle = (resetn == 1) & (wsm_state == WSM_WAIT_FIRST_FD) & M_AXI_WREADY & M_AXI_WVALID; 
+wire first_cycle_of_frame = (resetn == 1) & (wsm_state == WSM_WAIT_FIRST_FD) & M_AXI_WREADY & M_AXI_WVALID; 
 
 // This is the number of frame-data cycles seen so far
 reg[31:0] fd_cycle_count;
 
 //==============================================================================
-// Whenever "first_fd_cycle" strobes high, this state machine will read in 
+// Whenever "first_cycle_of_frame" strobes high, this state machine will read in 
 // two data-cycle of metadata and store them in metadata[0] and metadata[1].
 //==============================================================================
 reg [1:0] rmd_state;
@@ -162,7 +162,7 @@ always @(posedge clk) begin
     
     else case (rmd_state)
 
-        0:  if (first_fd_cycle) begin
+        0:  if (first_cycle_of_frame) begin
                 rmd_state <= 1;
             end
 
@@ -348,7 +348,7 @@ always @* begin
                 awsm_fd_write = 1;
                 M_AXI_AWADDR  = (group_select == 0) ? fd0_address : fd1_address;
                 M_AXI_AWLEN   = FD_BEATS_PER_BURST - 1;
-                M_AXI_AWVALID = first_fd_cycle;
+                M_AXI_AWVALID = first_cycle_of_frame;
             end
 
         // Are we emitting a write-request for frame-data?
@@ -408,27 +408,26 @@ assign M_AXI_AWPROT  = 0;
 //==============================================================================
 // This state machine issues the write-requests on the AW-channel.   
 //==============================================================================
-reg[31:0] aw_fd_burst_num;
+reg[31:0] aw_fd_burst;
 //------------------------------------------------------------------------------
 always @(posedge clk) begin
 
     if (resetn == 0) begin
-        awsm_state      <= AWSM_EMIT_FIRST_FD_REQ;
-        aw_fd_burst_num <= 0;
+        awsm_state  <= AWSM_EMIT_FIRST_FD_REQ;
     end else case (awsm_state)
 
     // Emit the first write-request
     AWSM_EMIT_FIRST_FD_REQ:
         if (M_AXI_AWVALID & M_AXI_AWREADY) begin
-            aw_fd_burst_num <= 2;
-            awsm_state      <= AWSM_EMIT_FD_WRITE_REQS;
+            aw_fd_burst <= 2;
+            awsm_state  <= AWSM_EMIT_FD_WRITE_REQS;
         end
 
     // Emit as many write-request as we need for the entire data-frame
     AWSM_EMIT_FD_WRITE_REQS:
         if (M_AXI_AWVALID & M_AXI_AWREADY) begin
-            if (aw_fd_burst_num < FD_BURSTS_PER_FRAME)
-                aw_fd_burst_num <= aw_fd_burst_num + 1;
+            if (aw_fd_burst < FD_BURSTS_PER_FRAME)
+                aw_fd_burst <= aw_fd_burst + 1;
             else
                 awsm_state <= AWSM_EMIT_MD_WRITE_REQ0;
         end
@@ -446,8 +445,7 @@ always @(posedge clk) begin
     // Emit the write-request for the frame-counter
     AWSM_EMIT_FC_WRITE_REQ:
         if (M_AXI_AWVALID & M_AXI_AWREADY) begin
-            aw_fd_burst_num <= 1;
-            awsm_state      <= AWSM_EMIT_FIRST_FD_REQ;
+            awsm_state <= AWSM_EMIT_FIRST_FD_REQ;
         end
 
     endcase
@@ -485,6 +483,24 @@ always @* begin
                 M_AXI_WVALID   = axis_fd_tvalid;
             end            
 
+        WSM_WRITE_MD00:
+            begin
+                axis_fd_tready = 0;
+                M_AXI_WDATA    = metadata[0];
+                M_AXI_WSTRB    = -1;
+                M_AXI_WLAST    = 0;
+                M_AXI_WVALID   = 1;
+            end            
+
+        WSM_WRITE_MD01:
+            begin
+                axis_fd_tready = 0;
+                M_AXI_WDATA    = metadata[1];
+                M_AXI_WSTRB    = -1;
+                M_AXI_WLAST    = 1;
+                M_AXI_WVALID   = 1;
+            end            
+
         WSM_WRITE_MD10:
             begin
                 axis_fd_tready = 0;
@@ -503,29 +519,11 @@ always @* begin
                 M_AXI_WVALID   = 1;
             end            
 
-        WSM_WRITE_MD20:
-            begin
-                axis_fd_tready = 0;
-                M_AXI_WDATA    = metadata[0];
-                M_AXI_WSTRB    = -1;
-                M_AXI_WLAST    = 0;
-                M_AXI_WVALID   = 1;
-            end            
-
-        WSM_WRITE_MD21:
-            begin
-                axis_fd_tready = 0;
-                M_AXI_WDATA    = metadata[1];
-                M_AXI_WSTRB    = -1;
-                M_AXI_WLAST    = 1;
-                M_AXI_WVALID   = 1;
-            end            
-
         WSM_WRITE_FC:
             begin
                 axis_fd_tready = 0;
                 M_AXI_WDATA    = {frame_counter, frame_counter};
-                M_AXI_WSTRB    = -1;
+                M_AXI_WSTRB    = {4'b1111, 4'b1111};
                 M_AXI_WLAST    = 1;
                 M_AXI_WVALID   = 1;
             end            
@@ -568,25 +566,25 @@ always @(posedge clk) begin
                 if (M_AXI_WLAST) begin
                     beat <= 0;
                     if (w_fd_burst == FD_BURSTS_PER_FRAME)
-                        wsm_state  <= WSM_WRITE_MD10;
+                        wsm_state  <= WSM_WRITE_MD00;
                     else
                         w_fd_burst <= w_fd_burst + 1;
                 end
             end
+
+        WSM_WRITE_MD00:
+            if (M_AXI_WVALID & M_AXI_WREADY)
+                wsm_state <= WSM_WRITE_MD01;
+
+        WSM_WRITE_MD01:
+            if (M_AXI_WVALID & M_AXI_WREADY)
+                wsm_state <= WSM_WRITE_MD10;
 
         WSM_WRITE_MD10:
             if (M_AXI_WVALID & M_AXI_WREADY)
                 wsm_state <= WSM_WRITE_MD11;
 
         WSM_WRITE_MD11:
-            if (M_AXI_WVALID & M_AXI_WREADY)
-                wsm_state <= WSM_WRITE_MD20;
-
-        WSM_WRITE_MD20:
-            if (M_AXI_WVALID & M_AXI_WREADY)
-                wsm_state <= WSM_WRITE_MD21;
-
-        WSM_WRITE_MD21:
             if (M_AXI_WVALID & M_AXI_WREADY)
                 wsm_state <= WSM_WRITE_FC;
 
